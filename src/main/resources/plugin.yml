@@ -1,0 +1,5 @@
+name: sharpmc-bukkit-wakacje
+version: '1.0'
+author: 'skaut'
+main: sharpmc.pl.Main
+api-version: '1.20'
