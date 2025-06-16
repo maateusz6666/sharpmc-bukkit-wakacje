@@ -13,7 +13,7 @@ import sharpmc.pl.utils.ChatUtil;
 @Command(name = "boss")
 @Permission("sharpmc.bukkit.boss")
 public class BossCommand {
-    private final BossManager bossManager = BossManager.getInstance();
+    private final BossManager bossManager = new BossManager(Main.getInstance());
     private final PluginConfig pluginConfig = Main.getInstance().getPluginConfig();
 
     @Execute(name = "reload")

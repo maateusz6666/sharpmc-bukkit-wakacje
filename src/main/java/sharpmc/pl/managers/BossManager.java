@@ -1,11 +1,14 @@
+// src/main/java/sharpmc/pl/managers/BossManager.java
 package sharpmc.pl.managers;
 
+import com.fastasyncworldedit.core.util.TaskManager;
+import com.sk89q.worldedit.EditSession;
+import com.sk89q.worldedit.extent.clipboard.Clipboard;
+import com.sk89q.worldedit.math.BlockVector3;
+import com.sk89q.worldedit.world.block.BlockTypes;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
 import sharpmc.pl.Main;
 import sharpmc.pl.config.PluginConfig;
 import sharpmc.pl.objects.bosses.Boss;
@@ -16,101 +19,79 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class BossManager {
-    private final PluginConfig pluginConfig = Main.getInstance().getPluginConfig();
+
+    private final Main plugin;
+    private final PluginConfig pluginConfig;
     private final Map<String, Boss> activeBosses = new ConcurrentHashMap<>();
-    private final Map<Location, String> bossBlocks = new ConcurrentHashMap<>(); // Lokacja bloku -> ID bossa
+    private final Map<Location, String> bossBlocks = new ConcurrentHashMap<>();
+
+    // NOWE: Przechowuje sesję edycji z FAWE dla każdego bossa, aby móc cofnąć wklejenie
+    private final Map<String, EditSession> bossEditSessions = new ConcurrentHashMap<>();
+
     private final Random random = new Random();
 
-    private static BossManager instance;
-
-    private BossManager() {}
-
-    public static BossManager getInstance() {
-        if (instance == null) {
-            instance = new BossManager();
-        }
-        return instance;
+    public BossManager(Main plugin) {
+        this.plugin = plugin;
+        this.pluginConfig = plugin.getPluginConfig();
     }
 
     public void spawn(Location location) {
         String bossId = UUID.randomUUID().toString();
-
-        Boss boss = new Boss(bossId, location.clone(), 1000.0);
+        // Tworzymy bossa z tymczasowym HP, zostanie ono nadpisane po wklejeniu schematu
+        Boss boss = new Boss(bossId, location.clone(), 1.0);
         activeBosses.put(bossId, boss);
 
-        Main.getInstance().getLogger().info("Rozpoczynam tworzenie bossa o ID: " + bossId + " w lokacji: " +
-                location.getBlockX() + ", " + location.getBlockY() + ", " + location.getBlockZ());
+        Main.getInstance().getLogger().info("Rozpoczynam tworzenie bossa o ID: " + bossId + "...");
 
-        // Callback po wklejeniu schematyki
-        SchematicUtil.paste(pluginConfig.bossSchematic, location, () -> {
-            Bukkit.getScheduler().runTask(Main.getInstance(), () -> {
-                registerBossBlocks(boss, location);
-                startBossBarUpdater(boss);
-                Main.getInstance().getLogger().info("Boss " + bossId + " został pomyślnie utworzony!");
-            });
+        // Używamy zmodyfikowanej metody paste, która przekazuje nam dane z FAWE (clipboard i editSession)
+        SchematicUtil.paste(pluginConfig.bossSchematic, location, (clipboard, editSession) -> {
+            if (clipboard == null || editSession == null) {
+                Main.getInstance().getLogger().severe("Nie udało się wkleić schematu dla bossa: " + bossId);
+                activeBosses.remove(bossId); // Anuluj tworzenie bossa, jeśli wklejanie się nie powiodło
+                return;
+            }
+
+            // Zapisujemy sesję edycji, aby móc później usunąć strukturę
+            bossEditSessions.put(bossId, editSession);
+
+            // Rejestrujemy bloki i ustawiamy prawidłowe HP na podstawie danych ze schematu
+            registerBossBlocksFromClipboard(boss, clipboard, location);
+            startBossBarUpdater(boss);
+
+            Main.getInstance().getLogger().info("Boss " + bossId + " został pomyślnie utworzony!");
         });
     }
 
-    private void registerBossBlocks(Boss boss, Location centerLocation) {
-        // Skanuj obszar wokół lokacji spawnu bossa (np. 50x50x20)
-        int radius = 25;
-        int height = 10;
-
+    // NOWA METODA: Rejestruje bloki na podstawie danych ze schamtu, a nie przez skanowanie świata
+    private void registerBossBlocksFromClipboard(Boss boss, Clipboard clipboard, Location pasteLocation) {
         int registeredBlocks = 0;
+        BlockVector3 clipboardOrigin = clipboard.getOrigin();
+        BlockVector3 pasteCenter = BlockVector3.at(pasteLocation.getX(), pasteLocation.getY(), pasteLocation.getZ());
 
-        for (int x = -radius; x <= radius; x++) {
-            for (int y = -height; y <= height; y++) {
-                for (int z = -radius; z <= radius; z++) {
-                    Location blockLoc = centerLocation.clone().add(x, y, z);
-                    Block block = blockLoc.getBlock();
+        for (BlockVector3 blockPosInClipboard : clipboard.getRegion()) {
+            if (!clipboard.getBlock(blockPosInClipboard).getBlockType().equals(BlockTypes.AIR)) {
 
-                    // Rejestruj tylko bloki które nie są powietrzem i można je wykopać
-                    if (block.getType() != Material.AIR &&
-                            block.getType().isBlock() &&
-                            block.getType().getHardness() >= 0) { // Hardness >= 0 oznacza że można zniszczyć
+                BlockVector3 relativePos = blockPosInClipboard.subtract(clipboardOrigin);
+                BlockVector3 finalPos = pasteCenter.add(relativePos);
 
-                        bossBlocks.put(blockLoc, boss.getId());
-                        registeredBlocks++;
-                    }
-                }
+                // OSTATECZNA POPRAWKA: Użycie bezpośredniego dostępu do pól .x, .y, .z
+                Location blockLoc = new Location(
+                        pasteLocation.getWorld(),
+                        finalPos.x(), // Zamiast .getBlockX()
+                        finalPos.y(), // Zamiast .getBlockY()
+                        finalPos.z()  // Zamiast .getBlockZ()
+                );
+
+                bossBlocks.put(blockLoc, boss.getId());
+                registeredBlocks++;
             }
         }
 
         Main.getInstance().getLogger().info("Zarejestrowano " + registeredBlocks + " bloków dla bossa " + boss.getId());
 
-        // POPRAWKA: Ustaw HP bossa na podstawie liczby bloków
-        // Każdy blok = 1 HP, ale wyświetlaj jako procenty w boss barze
         boss.setMaxHealth(registeredBlocks);
         boss.setCurrentHealth(registeredBlocks);
         boss.updateBossBar();
-    }
-
-    private void startBossBarUpdater(Boss boss) {
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (!boss.isActive() || boss.isDead()) {
-                    this.cancel();
-                    return;
-                }
-
-                // Sprawdź graczy w pobliżu (50 bloków)
-                List<Player> nearbyPlayers = new ArrayList<>();
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    if (player.getWorld().equals(boss.getLocation().getWorld()) &&
-                            player.getLocation().distance(boss.getLocation()) <= 50) {
-                        nearbyPlayers.add(player);
-                        boss.addPlayerToBossBar(player);
-                    } else {
-                        boss.removePlayerFromBossBar(player);
-                    }
-                }
-            }
-        }.runTaskTimer(Main.getInstance(), 0L, 20L); // Co sekundę
-    }
-
-    public boolean isBossBlock(Location location) {
-        return bossBlocks.containsKey(location);
     }
 
     public void handleBlockBreak(Player player, Location blockLocation) {
@@ -120,17 +101,14 @@ public class BossManager {
         Boss boss = activeBosses.get(bossId);
         if (boss == null || !boss.isActive()) return;
 
-        // POPRAWKA: Usuń blok z mapy PRZED zadaniem obrażeń
-        bossBlocks.remove(blockLocation);
+        // Nie usuwamy już bloku z `bossBlocks`, ponieważ blok ma być "odnawialny"
+        // bossBlocks.remove(blockLocation); // TA LINIA ZOSTAŁA USUNIĘTA
 
-        // Zadaj obrażenia bossowi (1 blok = 1 HP)
+        Main.getInstance().getLogger().info(String.valueOf(boss.getCurrentHealth()));
+
         boss.damage(player, 1);
 
-        Main.getInstance().getLogger().info("Gracz " + player.getName() + " zniszczył blok bossa. " +
-                "Obecne HP: " + boss.getCurrentHealth() + "/" + boss.getMaxHealth());
-
-        // Sprawdź czy boss nie umarł
-        if (boss.isDead()) {
+        if (boss.getCurrentHealth() <= 0) {
             handleBossDeath(boss);
         }
     }
@@ -138,44 +116,21 @@ public class BossManager {
     private void handleBossDeath(Boss boss) {
         Main.getInstance().getLogger().info("Boss " + boss.getId() + " został pokonany!");
 
-        // Rozdaj nagrody
-        distributeRewards(boss);
+        // Logika nagród
+        Map<UUID, Integer> damageMap = boss.getPlayerDamage();
+        List<Map.Entry<UUID, Integer>> sortedDamagers = new ArrayList<>(damageMap.entrySet());
+        sortedDamagers.sort(Map.Entry.comparingByValue(Comparator.reverseOrder()));
 
-        // Usuń bossa
-        destroyBoss(boss.getId());
-
-        // Wyślij wiadomość wszystkim graczom
-        Bukkit.broadcastMessage("§c§lBOSS ZOSTAŁ POKONANY!");
-    }
-
-    private void distributeRewards(Boss boss) {
-        List<Reward> rewards = Main.getInstance().getPluginConfig().rewards;
-
-        for (Map.Entry<UUID, Integer> entry : boss.getPlayerDamage().entrySet()) {
+        List<Reward> rewards = pluginConfig.rewards;
+        for (int i = 0; i < sortedDamagers.size() && i < rewards.size(); i++) {
+            Map.Entry<UUID, Integer> entry = sortedDamagers.get(i);
             Player player = Bukkit.getPlayer(entry.getKey());
-            if (player == null || !player.isOnline()) continue;
-
-            double contribution = boss.getPlayerContribution(entry.getKey());
-            int damageDealt = entry.getValue();
-
-            player.sendMessage("§aWykopałeś §e" + damageDealt + " §abloków (§e" +
-                    String.format("%.1f", contribution * 100) + "%§a wkładu)");
-
-            // Losuj nagrody na podstawie wkładu
-            giveRewardsToPlayer(player, rewards, contribution);
-        }
-    }
-
-    private void giveRewardsToPlayer(Player player, List<Reward> rewards, double contribution) {
-        for (Reward reward : rewards) {
-            // Zwiększ szansę na nagrodę w zależności od wkładu gracza
-            double adjustedChance = reward.getChance() * (contribution + 0.1); // Minimum 10% szansy
-
-            if (random.nextDouble() * 100 < adjustedChance) {
-                player.getInventory().addItem(reward.getItemStack().clone());
-                player.sendMessage("§aOtrzymałeś nagrodę: §e" + reward.getName());
+            if (player != null) {
             }
         }
+
+        // Zniszczenie bossa (w tym usunięcie struktury ze świata)
+        destroyBoss(boss.getId());
     }
 
     public void destroyBoss(String bossId) {
@@ -183,22 +138,32 @@ public class BossManager {
         if (boss != null) {
             boss.destroy();
 
-            // Usuń wszystkie bloki tego bossa
+            // Usuwamy wszystkie bloki powiązane z tym bossem z naszej mapy
             bossBlocks.entrySet().removeIf(entry -> entry.getValue().equals(bossId));
+
+            // NOWE: Cofamy sesję edycji FAWE, co usuwa strukturę ze świata
+            EditSession session = bossEditSessions.remove(bossId);
+            if (session != null) {
+                // Używamy TaskManagera z FAWE, aby operacja co cofnięcia była asynchroniczna i bezpieczna
+                TaskManager.taskManager().async(() -> {
+                    session.undo(session);
+                    Main.getInstance().getLogger().info("Struktura bossa " + bossId + " została usunięta ze świata.");
+                });
+            }
         }
     }
 
-    public void destroyAllBosses() {
-        for (String bossId : new ArrayList<>(activeBosses.keySet())) {
-            destroyBoss(bossId);
-        }
+    private void startBossBarUpdater(Boss boss) {
+        Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            if (!boss.isActive()) {
+                // Anuluj zadanie, gdy boss jest nieaktywny
+                return;
+            }
+            boss.updateBossBar();
+        }, 0L, 20L); // Aktualizuj co sekundę
     }
 
-    public Collection<Boss> getActiveBosses() {
-        return activeBosses.values();
-    }
-
-    public Boss getBoss(String id) {
-        return activeBosses.get(id);
+    public boolean isBossBlock(Location location) {
+        return bossBlocks.containsKey(location);
     }
 }
