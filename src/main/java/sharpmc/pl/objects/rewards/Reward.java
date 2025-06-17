@@ -6,6 +6,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.bukkit.inventory.ItemStack;
 
+import java.util.List;
+
 @Getter
 @Setter
 @AllArgsConstructor
@@ -13,5 +15,5 @@ import org.bukkit.inventory.ItemStack;
 public class Reward {
     private String name;
     private Double chance;
-    private ItemStack itemStack;
+    private List<String> commands;
 }

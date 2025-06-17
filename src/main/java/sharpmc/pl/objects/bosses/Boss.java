@@ -7,128 +7,104 @@ import org.bukkit.Location;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import sharpmc.pl.Main;
-import sharpmc.pl.config.PluginConfig;
-import sharpmc.pl.utils.ChatUtil;
+import sharpmc.pl.config.sections.BossBarSection;
 
 import java.util.HashMap;
+import java.util.List; // Dodajemy import
 import java.util.Map;
 import java.util.UUID;
 
 @Getter
 @Setter
 public class Boss {
-    private final PluginConfig pluginConfig = Main.getInstance().getPluginConfig();
 
-    private String id;
-    private Location location;
+    private final String id;
+    private final Location location;
+    private final List<Location> allBlockLocations; // NOWE POLE: przechowuje wszystkie bloki bossa
     private double maxHealth;
     private double currentHealth;
-    private BossBar bossBar;
-    private Map<UUID, Integer> playerDamage;
+    private final BossBar bossBar;
+    private final Map<UUID, Integer> playerDamage;
     private boolean isActive;
-    private long spawnTime;
+    private final long spawnTime;
 
-    public Boss(String id, Location location, double maxHealth) {
+    /**
+     * Zaktualizowany konstruktor, który przyjmuje listę bloków.
+     */
+    public Boss(String id, Location location, List<Location> allBlockLocations) {
         this.id = id;
         this.location = location;
-        this.maxHealth = maxHealth;
-        this.currentHealth = maxHealth;
+        this.allBlockLocations = allBlockLocations; // Przypisujemy listę do nowego pola
         this.playerDamage = new HashMap<>();
         this.isActive = true;
         this.spawnTime = System.currentTimeMillis();
 
+        BossBarSection bossBarConfig = Main.getInstance().getPluginConfig().bossBar;
         this.bossBar = Bukkit.createBossBar(
-                ChatUtil.coloredHex(
-                        pluginConfig.bossBar.title
-                                .replace("{current_health}", String.format("%.0f", currentHealth))
-                                .replace("{max_health}", String.format("%.0f", maxHealth))
-                ),
-                pluginConfig.bossBar.color,
-                pluginConfig.bossBar.style
+                formatBossBarTitle(),
+                bossBarConfig.color,
+                bossBarConfig.style
         );
-        this.bossBar.setProgress(1.0);
     }
 
     public void damage(Player player, int amount) {
-        if (!isActive) return;
+        if (!this.isActive) return;
 
-        // Zapisz obrażenia gracza
-        playerDamage.put(player.getUniqueId(), playerDamage.getOrDefault(player.getUniqueId(), 0) + amount);
+        this.playerDamage.put(player.getUniqueId(), this.playerDamage.getOrDefault(player.getUniqueId(), 0) + amount);
+        this.currentHealth = Math.max(0, this.currentHealth - amount);
 
-        // POPRAWKA: Odejmij HP od bossa
-        currentHealth = Math.max(0, currentHealth - amount);
-
-        // Aktualizuj boss bar
         updateBossBar();
-
-        // Log dla debugowania
-        Main.getInstance().getLogger().info("Boss " + id + " otrzymał " + amount + " obrażeń od " + player.getName() +
-                ". HP: " + currentHealth + "/" + maxHealth);
-
-        // Sprawdź czy boss umarł
-        if (currentHealth <= 0) {
-            isActive = false;
-            Main.getInstance().getLogger().info("Boss " + id + " został pokonany!");
-        }
     }
 
     public void updateBossBar() {
-        // POPRAWKA: Poprawne obliczenie progresu
-        double progress = maxHealth > 0 ? Math.max(0.0, Math.min(1.0, currentHealth / maxHealth)) : 0.0;
-        bossBar.setProgress(progress);
+        double progress = this.maxHealth > 0 ? Math.max(0.0, Math.min(1.0, this.currentHealth / this.maxHealth)) : 0.0;
+        this.bossBar.setProgress(progress);
+        this.bossBar.setTitle(formatBossBarTitle());
+    }
 
-        // Aktualizuj tytuł z aktualnym HP
-        bossBar.setTitle(
-                ChatUtil.coloredHex(
-                        pluginConfig.bossBar.title
-                                .replace("{current_health}", String.format("%.0f", currentHealth))
-                                .replace("{max_health}", String.format("%.0f", maxHealth))
-                )
+    private String formatBossBarTitle() {
+        BossBarSection bossBarConfig = Main.getInstance().getPluginConfig().bossBar;
+        return sharpmc.pl.utils.ChatUtil.coloredHex(bossBarConfig.title
+                .replace("{current_health}", String.format("%.0f", this.currentHealth))
+                .replace("{max_health}", String.format("%.0f", this.maxHealth))
         );
     }
 
     public void addPlayerToBossBar(Player player) {
-        if (!bossBar.getPlayers().contains(player)) {
-            bossBar.addPlayer(player);
+        if (!this.bossBar.getPlayers().contains(player)) {
+            this.bossBar.addPlayer(player);
         }
     }
 
     public void removePlayerFromBossBar(Player player) {
-        bossBar.removePlayer(player);
+        this.bossBar.removePlayer(player);
     }
 
     public void destroy() {
-        isActive = false;
-        bossBar.removeAll();
+        this.isActive = false;
+        this.bossBar.removeAll();
     }
 
     public boolean isDead() {
-        return currentHealth <= 0;
+        return this.currentHealth <= 0;
     }
 
     public int getTotalDamageDealt() {
-        return playerDamage.values().stream().mapToInt(Integer::intValue).sum();
+        return this.playerDamage.values().stream().mapToInt(Integer::intValue).sum();
     }
 
     public double getPlayerContribution(UUID uniqueId) {
-        int playerDmg = playerDamage.getOrDefault(uniqueId, 0);
         int totalDmg = getTotalDamageDealt();
-        return totalDmg > 0 ? (double) playerDmg / totalDmg : 0.0;
+        return totalDmg > 0 ? (double) this.playerDamage.getOrDefault(uniqueId, 0) / totalDmg : 0.0;
     }
 
-    // Getter dla obrażeń graczy
-    public int getPlayerDamage(UUID playerId) {
-        return playerDamage.getOrDefault(playerId, 0);
-    }
-
-    // Dodane settery dla maxHealth i currentHealth
     public void setMaxHealth(double maxHealth) {
         this.maxHealth = maxHealth;
-        updateBossBar(); // Aktualizuj boss bar po zmianie maxHealth
+        updateBossBar();
     }
 
     public void setCurrentHealth(double currentHealth) {
         this.currentHealth = currentHealth;
-        updateBossBar(); // Aktualizuj boss bar po zmianie currentHealth
+        updateBossBar();
     }
 }

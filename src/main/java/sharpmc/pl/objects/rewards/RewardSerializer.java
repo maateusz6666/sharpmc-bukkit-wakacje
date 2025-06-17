@@ -5,7 +5,6 @@ import eu.okaeri.configs.serdes.DeserializationData;
 import eu.okaeri.configs.serdes.ObjectSerializer;
 import eu.okaeri.configs.serdes.SerializationData;
 import lombok.NonNull;
-import org.bukkit.inventory.ItemStack;
 
 public class RewardSerializer implements ObjectSerializer<Reward> {
 
@@ -18,7 +17,7 @@ public class RewardSerializer implements ObjectSerializer<Reward> {
     public void serialize(@NonNull Reward object, @NonNull SerializationData data, @NonNull GenericsDeclaration generics) {
         data.add("name", object.getName());
         data.add("chance", object.getChance());
-        data.add("itemStack", object.getItemStack());
+        data.addCollection("commands", object.getCommands(), String.class);
     }
 
     @Override
@@ -26,7 +25,7 @@ public class RewardSerializer implements ObjectSerializer<Reward> {
         return new Reward(
                 data.get("name", String.class),
                 data.get("chance", Double.class),
-                data.get("itemStack", ItemStack.class)
+                data.getAsList("commands", String.class)
         );
     }
 }

@@ -1,7 +1,5 @@
-// src/main/java/sharpmc/pl/utils/SchematicUtil.java
 package sharpmc.pl.utils;
 
-import com.fastasyncworldedit.core.util.TaskManager;
 import com.sk89q.worldedit.EditSession;
 import com.sk89q.worldedit.WorldEdit;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
@@ -21,69 +19,70 @@ import sharpmc.pl.Main;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
-import java.util.function.BiConsumer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.logging.Level;
 
-public class SchematicUtil {
+public final class SchematicUtil {
 
-    // ZMIANA: Zmieniliśmy typ callbacku, aby przyjmował dwa argumenty: Clipboard i EditSession
-    public static void paste(String schematicName, Location location, BiConsumer<Clipboard, EditSession> callback) {
-        Bukkit.getScheduler().runTaskAsynchronously(Main.getInstance(), () -> {
-            File schematicFile = new File(Main.getInstance().getDataFolder(), "schematics/" + schematicName);
-            if (!schematicFile.exists()) {
-                Main.getInstance().getLogger().severe("Nie znaleziono pliku schematu: " + schematicName);
-                if (callback != null) {
-                    // Wywołujemy callback z nullami, aby poinformować o błędzie
-                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(null, null));
-                }
-                return;
-            }
+    private SchematicUtil() {
+    }
 
-            ClipboardFormat format = ClipboardFormats.findByFile(schematicFile);
-            if (format == null) {
-                Main.getInstance().getLogger().severe("Nie rozpoznano formatu schematu: " + schematicName);
-                if (callback != null) {
-                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(null, null));
-                }
-                return;
-            }
+    public static void paste(String schematicName, Location pasteLocation, Consumer<List<Location>> callback) {
+        File schematicFile = new File(Main.getInstance().getDataFolder(), "schematics/" + schematicName);
+        if (!schematicFile.exists()) {
+            Main.getInstance().getLogger().log(Level.SEVERE, "Plik schematu nie został znaleziony: " + schematicName);
+            callback.accept(new ArrayList<>());
+            return;
+        }
 
-            try (FileInputStream fis = new FileInputStream(schematicFile);
-                 ClipboardReader reader = format.getReader(fis)) {
+        ClipboardFormat format = ClipboardFormats.findByFile(schematicFile);
+        if (format == null) {
+            Main.getInstance().getLogger().log(Level.SEVERE, "Nieznany format schematu: " + schematicName);
+            callback.accept(new ArrayList<>());
+            return;
+        }
 
-                Clipboard clipboard = reader.read();
-                World weWorld = BukkitAdapter.adapt(location.getWorld());
+        // Normalizujemy lokalizację wklejenia do koordynatów bloku, aby uniknąć błędów precyzji
+        Location blockPasteLoc = pasteLocation.getBlock().getLocation();
+        World world = BukkitAdapter.adapt(Objects.requireNonNull(blockPasteLoc.getWorld()));
 
-                // Tworzymy nową sesję edycji dla tej operacji
-                EditSession editSession = WorldEdit.getInstance().newEditSession(weWorld);
+        try (ClipboardReader reader = format.getReader(new FileInputStream(schematicFile))) {
+            Clipboard clipboard = reader.read();
+            List<Location> blockLocations = new ArrayList<>();
 
-                // Wykonujemy wklejanie w asynchronicznym wątku FAWE
-                TaskManager.taskManager().async(() -> {
-                    try {
-                        Operation operation = new ClipboardHolder(clipboard)
-                                .createPaste(editSession)
-                                .to(BlockVector3.at(location.getX(), location.getY(), location.getZ()))
-                                .ignoreAirBlocks(false)
-                                .build();
-                        Operations.complete(operation);
-                        editSession.flushQueue();
+            // Pobieramy punkt, w którym stał gracz podczas kopiowania (klucz do sukcesu!)
+            BlockVector3 clipboardOrigin = clipboard.getOrigin();
 
-                        if (callback != null) {
-                            // Po udanym wklejeniu, przekazujemy obiekt clipboard i editSession do naszego BossManagera
-                            Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(clipboard, editSession));
-                        }
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                        if (callback != null) {
-                            Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(null, null));
-                        }
-                    }
-                });
-            } catch (IOException e) {
-                e.printStackTrace();
-                if (callback != null) {
-                    Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(null, null));
+            // Obliczamy finalne pozycje bloków, opierając się na punkcie 'origin'
+            for (BlockVector3 pt : clipboard.getRegion()) {
+                if (!clipboard.getBlock(pt).getBlockType().getMaterial().isAir()) {
+                    // Wektor przesunięcia od punktu 'origin' do danego bloku w schemacie
+                    BlockVector3 offset = pt.subtract(clipboardOrigin);
+                    // Dodajemy to przesunięcie do miejsca wklejenia
+                    Location finalLoc = blockPasteLoc.clone().add(offset.getX(), offset.getY(), offset.getZ());
+                    blockLocations.add(finalLoc);
                 }
             }
-        });
+
+            // Wklejamy schemat - WorldEdit wewnętrznie robi dokładnie to samo, co obliczyliśmy wyżej
+            try (EditSession editSession = WorldEdit.getInstance().newEditSession(world)) {
+                Operation operation = new ClipboardHolder(clipboard)
+                        .createPaste(editSession)
+                        .to(BlockVector3.at(blockPasteLoc.getX(), blockPasteLoc.getY(), blockPasteLoc.getZ()))
+                        .ignoreAirBlocks(true)
+                        .build();
+                Operations.complete(operation);
+            }
+
+            // Uruchamiamy callback z poprawnie obliczoną listą lokalizacji
+            Bukkit.getScheduler().runTask(Main.getInstance(), () -> callback.accept(blockLocations));
+
+        } catch (IOException e) {
+            e.printStackTrace();
+            callback.accept(new ArrayList<>());
+        }
     }
 }

@@ -12,7 +12,9 @@ import sharpmc.pl.commands.handler.MissingPermissionHandler;
 import sharpmc.pl.config.PluginConfig;
 import sharpmc.pl.config.factory.ConfigurationFactory;
 import sharpmc.pl.listeners.BossListener;
+import sharpmc.pl.managers.BossManager;
 import sharpmc.pl.objects.rewards.RewardSerializer;
+import sharpmc.pl.tasks.BossScheduler;
 
 public final class Main extends JavaPlugin {
 
@@ -20,6 +22,7 @@ public final class Main extends JavaPlugin {
     private static Main instance;
     @Getter
     private PluginConfig pluginConfig;
+    private BossScheduler bossScheduler;
     private LiteCommands<CommandSender> liteCommands;
 
     @Override
@@ -40,10 +43,14 @@ public final class Main extends JavaPlugin {
                 .invalidUsage(new InvalidUsageHandler())
                 .missingPermission(new MissingPermissionHandler())
                 .build();
+
+        bossScheduler = new BossScheduler(this, pluginConfig, BossManager.getInstance());
+        bossScheduler.start();
     }
 
     @Override
     public void onDisable() {
         if (liteCommands != null) liteCommands.unregister();
+        BossManager.getInstance().destroyAllBosses();
     }
 }

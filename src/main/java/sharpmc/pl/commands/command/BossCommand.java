@@ -13,18 +13,32 @@ import sharpmc.pl.utils.ChatUtil;
 @Command(name = "boss")
 @Permission("sharpmc.bukkit.boss")
 public class BossCommand {
-    private final BossManager bossManager = new BossManager(Main.getInstance());
     private final PluginConfig pluginConfig = Main.getInstance().getPluginConfig();
+    private final BossManager bossManager = BossManager.getInstance();
 
     @Execute(name = "reload")
     public void reload(@Context Player player) {
-        pluginConfig.load();
-
+        Main.getInstance().getPluginConfig().load();
         ChatUtil.successMessage(player, "Konfiguracja została pomyślnie przeładowana.");
     }
 
     @Execute(name = "spawn")
     public void spawn(@Context Player player) {
-        bossManager.spawn(player.getLocation().clone());
+        this.bossManager.spawn(pluginConfig.bossLocation, pluginConfig.bossHealth);
+        ChatUtil.successMessage(player, "Ręcznie stworzono bossa w lokalizacji z konfiguracji.");
+    }
+
+    @Execute(name = "location")
+    public void location(@Context Player player) {
+        pluginConfig.bossLocation = player.getLocation();
+        pluginConfig.save();
+        pluginConfig.load();
+
+        ChatUtil.successMessage(player, "Ustawiono nową lokalizację bossa w konfiguracji.");
+    }
+
+    @Execute(name = "visualize")
+    public void visualize(@Context Player player) {
+        this.bossManager.visualizeBossBlocks(player);
     }
 }
